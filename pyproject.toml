@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel", "setuptools-git-versioning<2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zigpy-blz"
+dynamic = ["version"]
+description = "A Python library for integrating Bouffalo Lab Zigbee (BLZ) radios with zigpy"
+urls = {repository = "https://github.com/fangzheli/zigpy-blz"}
+authors = [
+    {name = "Frank Li", email = "fangzhel@bouffalolab.com"}
+]
+readme = "README.md"
+license = {text = "GPL-3.0"}
+requires-python = ">=3.8"
+dependencies = [
+    "zigpy>=0.60.2",
+    "async_timeout",
+]
+
+[tool.setuptools.packages.find]
+exclude = ["tests", "tests.*"]
+
+[project.optional-dependencies]
+testing = [
+    "pytest>=7.3.1",
+    "pytest-asyncio>=0.21.0",
+    "pytest-timeout>=2.1.0",
+    "pytest-mock>=3.10.0",
+    "pytest-cov>=4.1.0",
+]
+
+[tool.setuptools-git-versioning]
+enabled = true
+
+
+[tool.black]
+safe = true
+quiet = true
+
+[tool.isort]
+multi_line_output = 3
+length_sort = true
+balanced_wrapping = true
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+line_length = 88
+indent = "    "
+sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+default_section = "THIRDPARTY"
+known_first_party = ["zigpy_blz", "tests"]
+forced_separate = "tests"
+combine_as_imports = true
+
+[tool.flake8]
+exclude = ".venv,.git,.tox,docs,venv,bin,lib,deps,build"
+# To work with Black
+max-line-length = 88
+# W503: Line break occurred before a binary operator
+# E203: Whitespace before ':'
+# D202 No blank lines allowed after function docstring
+ignore = "W503,E203,D202"
+
+[tool.mypy]
+check_untyped_defs = true
+show_error_codes = true
+show_error_context = true
+disable_error_code = [
+    "attr-defined",
+    "assignment",
+    "arg-type",
+    "union-attr",
+    "var-annotated",
+    "name-defined",
+]
+
+[tool.coverage.run]
+source = ["zigpy_blz"]
+
+[tool.pyupgrade]
+py37plus = true
