@@ -141,9 +141,6 @@ class ControllerApplication(zigpy.application.ControllerApplication):
 
     async def add_endpoint(self, descriptor: zdo_t.SimpleDescriptor) -> None:
         """Register a new endpoint on the device."""
-        # LOGGER.warning(
-        #     "Blz doesn't support add a new endpoint"
-        # )
         LOGGER.debug(
             "Register a new endpoint on the device"
         )
