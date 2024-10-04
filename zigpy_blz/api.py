@@ -64,10 +64,10 @@ class Blz:
 
         assert self._uart is None
         self._uart = await zigpy_blz.uart.connect(self._config, self)
-        await self.reset()
-        LOGGER.debug("Reset the NCP")
-        await asyncio.sleep(3)
-        LOGGER.debug("After wait for three seconds")
+        # await self.reset()
+        # LOGGER.debug("Reset the NCP")
+        # await asyncio.sleep(3)
+        # LOGGER.debug("After wait for three seconds")
         status = await self.network_init()
         LOGGER.info("Connected to NCP")
         self._device_state = NetworkState.CONNECTED
@@ -155,7 +155,7 @@ class Blz:
         self._rx_seq = frame.seq & 0x0F  # Extract the Rx sequence from the received frame
 
         try:
-            LOGGER.debug("Deserializing payload for frame_id=%s", frame.frame_id)
+            LOGGER.debug("Deserializing payload for frame_id=%#x", frame.frame_id)
             params, _ = deserialize_dict(frame.payload, FRAME_SCHEMAS[frame.frame_id][1])
         except Exception as exc:
             LOGGER.warning("Failed to parse frame %s: %s", frame, exc)
@@ -228,6 +228,7 @@ class Blz:
     async def get_value(self, value_id: t.uint8_t) -> Any:
         """Get a value from NCP."""
         rsp = await self.send_frame(FrameId.GET_VALUE, value_id=value_id)
+        LOGGER.debug("Host is getting value %#x", value_id)
         return rsp
     
     async def set_value(self, value_id: t.uint8_t, value: bytes) -> Status:

@@ -141,17 +141,20 @@ class ControllerApplication(zigpy.application.ControllerApplication):
 
     async def add_endpoint(self, descriptor: zdo_t.SimpleDescriptor) -> None:
         """Register a new endpoint on the device."""
-        LOGGER.warning(
-            "Blz doesn't support add a new endpoint"
-        )
-        # await self._api.add_endpoint(
-        #     endpoint=descriptor.endpoint,
-        #     profile_id=descriptor.profile,
-        #     device_id=descriptor.device_type,
-        #     app_flags=descriptor.device_version,
-        #     input_clusters=descriptor.input_clusters,
-        #     output_clusters=descriptor.output_clusters,
+        # LOGGER.warning(
+        #     "Blz doesn't support add a new endpoint"
         # )
+        LOGGER.debug(
+            "Register a new endpoint on the device"
+        )
+        await self._api.add_endpoint(
+            endpoint=descriptor.endpoint,
+            profile_id=descriptor.profile,
+            device_id=descriptor.device_type,
+            app_flags=descriptor.device_version,
+            input_clusters=descriptor.input_clusters,
+            output_clusters=descriptor.output_clusters,
+        )
 
     async def send_packet(self, packet):
         LOGGER.debug("Sending packet: %r", packet)

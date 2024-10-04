@@ -42,8 +42,7 @@ class BlzUartGateway(asyncio.Protocol):
         """Send data after framing and escaping."""
         LOGGER.debug("Sending: %s", binascii.hexlify(data).decode())
         crc = self._compute_crc(data)
-        frame = self._escape_frame(data) + crc
-        frame = self.START_BYTE + frame + self.STOP_BYTE
+        frame = self.START_BYTE + self._escape_frame(data + crc) + self.STOP_BYTE
         self._transport.write(frame)
         LOGGER.debug("Sending with CRC: %s", binascii.hexlify(frame).decode())
 
