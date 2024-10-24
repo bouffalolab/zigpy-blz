@@ -7,13 +7,14 @@ import zigpy.application
 import zigpy.config
 import zigpy.device
 import zigpy.state
+import zigpy.exceptions
 import zigpy.types as t
 import zigpy.zdo.types as zdo_t
 import zigpy.util
 import importlib.metadata
 
 from zigpy_blz.api import Blz
-from zigpy_blz.blz.types import BlzTransmitOptions, BlzMsgType, FrameId, Bytes, BLZDeviceRole
+from zigpy_blz.blz.types import BlzTransmitOptions, BlzMsgType, FrameId, Bytes, BLZDeviceRole, Status
 import zigpy_blz.exception
 
 LOGGER = logging.getLogger(__name__)
@@ -64,19 +65,34 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         self.devices[self.state.node_info.ieee] = coordinator
 
     async def reset_network_info(self):
-        await self.leave_network()
+        await self._api.leave_network()
 
     async def write_network_info(self, *, network_info, node_info):
-        LOGGER.warning(
-            "Blz doesn't support writing the network info into firmware"
+        """Set network info to NCP"""
+        LOGGER.info("Set network info to NCP")
+        await self.reset_network_info()
+        # set the network information after leave the network
+        await self._api.set_security_infos(nwk_key=network_info.network_key.key, outgoing_frame_counter=t.uint32_t.deserialize(t.uint32_t(network_info.network_key.tx_counter).serialize())[0], nwk_key_seq_num=t.uint8_t.deserialize(t.uint8_t(network_info.network_key.seq).serialize())[0])
+        await self._api.set_global_tc_link_key(network_info.tc_link_key.key, outgoing_frame_counter=t.uint32_t.deserialize(t.uint32_t(network_info.tc_link_key.tx_counter).serialize())[0])
+        # await self._api.set_unique_tc_link_key(node_info.ieee, network_info.tc_link_key.key)
+        epid, _ = zigpy.types.uint64_t.deserialize(
+            network_info.extended_pan_id.serialize()
         )
+        try:
+            await self._api.form_network(ext_pan_id=epid, pan_id=t.uint16_t(network_info.pan_id), channel=t.uint8_t(network_info.channel))
+        except:
+            raise zigpy.exceptions.FormationFailure(
+                f"Unexpected error form network"
+            )
 
     async def load_network_info(self, *, load_devices=False):
+        """Load network info from NCP"""
+        LOGGER.info("Load network info from NCP")
         network_info = self.state.network_info
         node_info = self.state.node_info
-
         ieee = await self._api.get_mac_address()
         node_info.ieee = t.EUI64(ieee)
+        await self._api.network_init() #TODO：make sure the stack is on
         nwk_info = await self._api.get_network_info()
         if nwk_info["node_type"] == BLZDeviceRole.COORDINATOR:
             node_info.logical_type = zdo_t.LogicalType.Coordinator
@@ -106,6 +122,7 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         network_info.nwk_update_id = nwk_info["nwk_update_id"]
 
         if network_info.channel == 0:
+            LOGGER.error("Network channel is zero")
             raise zigpy.exceptions.NetworkNotFormed("Network channel is zero")
 
         security_info = await self._api.get_security_infos()
@@ -119,10 +136,12 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         network_info.tc_link_key = zigpy.state.Key()
         network_info.tc_link_key.partner_ieee = await self._api.get_trust_center_address()
 
-        link_key = await self._api.get_unique_tc_link_key(
-            network_info.tc_link_key.partner_ieee,
-        )
+        # link_key = await self._api.get_unique_tc_link_key(
+        #     network_info.tc_link_key.partner_ieee,
+        # )
+        link_key = await self._api.get_global_tc_link_key()
         network_info.tc_link_key.key = link_key['link_key']
+        network_info.tc_link_key.tx_counter = link_key['outgoing_frame_counter']
 
 
     async def force_remove(self, dev):
@@ -209,15 +228,18 @@ class ControllerApplication(zigpy.application.ControllerApplication):
 
     def blz_callback_handler(self, frame_id, response):
             """Handle BLZ callbacks."""
-            LOGGER.debug("Callback handler invoked: %s: %s", frame_id, response)
+            LOGGER.debug("Callback handler invoked: frame_id: %#x, response: %s", frame_id, response)
             if frame_id == FrameId.APS_DATA_INDICATION:
                 # Handle incoming Zigbee APS data indication
                 self._handle_aps_data_indication(response)
             elif frame_id == FrameId.DEVICE_JOIN_CALLBACK:
                 # Handle device join event
                 self._handle_device_join(response)
+            elif frame_id == FrameId.STACK_STATUS_CALLBACK:
+                # Handle stack status event
+                self._handle_stack_status(response)
             else:
-                print("aps confirm, %s, %s", frame_id, response)
+                LOGGER.warning("Other frame is in callback:, frame_id: %#x, response: %s", frame_id, response)
 
     def _handle_aps_data_indication(self, response):
         """Process APS data indication."""
@@ -262,6 +284,12 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         ieee = t.EUI64(response["eui64"])
         LOGGER.info(f"Device joined: IEEE={ieee}, NWK={nwk}")
         self.handle_join(nwk, ieee, 0)
+    
+    def _handle_stack_status(self, response):
+        if response['status'] != Status.SUCCESS:
+            LOGGER.error("Stack status is incorrect: %s", response)
+            # await self._api.reset()
+            # LOGGER.info("NCP is reset due to stack error")
 
 
 class BlzDevice(zigpy.device.Device):

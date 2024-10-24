@@ -25,12 +25,12 @@ class BlzUartGateway(asyncio.Protocol):
     def connection_lost(self, exc) -> None:
         """Handle connection loss."""
         if exc:
-            LOGGER.warning("Connection lost: %r", exc, exc_info=exc)
+            LOGGER.warning("UART Connection lost: %r", exc, exc_info=exc)
         self._api.connection_lost(exc)
 
     def connection_made(self, transport):
         """Handle connection establishment."""
-        LOGGER.debug("Connection established")
+        LOGGER.info("UART Connection established")
         self._transport = transport
         if self._connected_future and not self._connected_future.done():
             self._connected_future.set_result(True)
@@ -44,14 +44,14 @@ class BlzUartGateway(asyncio.Protocol):
         crc = self._compute_crc(data)
         frame = self.START_BYTE + self._escape_frame(data + crc) + self.STOP_BYTE
         self._transport.write(frame)
-        LOGGER.debug("Sending with CRC: %s", binascii.hexlify(frame).decode())
+        LOGGER.info("Sending with CRC: %s", binascii.hexlify(frame).decode())
 
     def send_ack(self, rx_frame):
         """Send an ACK frame."""
         tx_seq = rx_frame[1] & 0x07
         rx_seq = tx_seq << 4
         ack_frame = bytes([rx_frame[0] & 0xF0]) + bytes([rx_seq]) + FrameId.ACK.to_bytes(2, 'little')
-        LOGGER.debug("Sending ACK for frame %s", ack_frame)
+        LOGGER.debug("Sending ACK frame %s", ack_frame)
         self.send(ack_frame)
 
     def data_received(self, data):
@@ -80,7 +80,7 @@ class BlzUartGateway(asyncio.Protocol):
             else:
                 LOGGER.debug("Skipping CRC check for frame with frmCtrl: 0x%02X", frm_ctrl)
 
-            LOGGER.debug("Frame received: %s", binascii.hexlify(frame).decode())
+            LOGGER.info("Frame received: %s", binascii.hexlify(frame).decode())
 
             if len(frame) > 2:
                 # If data section is included in the frame
@@ -137,7 +137,7 @@ async def connect(config: Dict[str, any], api: Callable) -> BlzUartGateway:
     connected_future = loop.create_future()
     protocol = BlzUartGateway(api, connected_future)
 
-    LOGGER.debug("Connecting to %s", config[zigpy.config.CONF_DEVICE_PATH])
+    LOGGER.info("UART Connecting to %s", config[zigpy.config.CONF_DEVICE_PATH])
 
     _, protocol = await zigpy.serial.create_serial_connection(
         loop=loop,
@@ -149,6 +149,6 @@ async def connect(config: Dict[str, any], api: Callable) -> BlzUartGateway:
 
     await connected_future
 
-    LOGGER.debug("Connected to %s", config[zigpy.config.CONF_DEVICE_PATH])
+    LOGGER.info("UART Connected to %s", config[zigpy.config.CONF_DEVICE_PATH])
 
     return protocol
