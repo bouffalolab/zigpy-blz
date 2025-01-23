@@ -207,8 +207,8 @@ FRAME_SCHEMAS = {
         {},  # No request data
         {
             "status": t.uint8_t,
-            "network_address": t.uint16_t,
-            "ieee_address": t.EUI64,
+            "value_length": t.uint8_t, 
+            "value": Bytes
         },  # Response schema
     ),
 
