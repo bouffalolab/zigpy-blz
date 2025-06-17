@@ -109,7 +109,7 @@ class Status(t.enum8):
     FAILURE = 1
     TIMEOUT = 2
 
-class FirmwareVersion(t.Struct, t.uint32_t):
+class FirmwareVersion(t.IntStruct, t.uint32_t):
     reserved: t.uint8_t
     patch: t.uint8_t
     minor: t.uint8_t
@@ -169,9 +169,3 @@ def deserialize_dict(data, schema):
 
             result[name] = None
     return result, data
-
-
-
-
-
-
