@@ -69,6 +69,8 @@ class Blz:
         # await asyncio.sleep(1)
         # LOGGER.debug("After wait for one seconds")
         await self.network_init()
+        await asyncio.sleep(1)
+        # wait for 1 second to make sure the network is ready
         LOGGER.info("Connected to NCP")
         self._device_state = NetworkState.CONNECTED
 
