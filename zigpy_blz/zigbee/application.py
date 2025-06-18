@@ -71,11 +71,14 @@ class ControllerApplication(zigpy.application.ControllerApplication):
     async def write_network_info(self, *, network_info, node_info):
         """Set network info to NCP"""
         LOGGER.info("Set network info to NCP")
+        await asyncio.sleep(2)
+        LOGGER.debug("wait for 2 seconds so the stack has done all the previous work")
         await self.reset_network_info()
-        # set the network information after leave the network
+        await asyncio.sleep(1)
+        LOGGER.debug("wait for a second so the stack has left current network")
+        # set the network information after leaving the network
         await self._api.set_security_infos(nwk_key=network_info.network_key.key, outgoing_frame_counter=t.uint32_t.deserialize(t.uint32_t(network_info.network_key.tx_counter).serialize())[0], nwk_key_seq_num=t.uint8_t.deserialize(t.uint8_t(network_info.network_key.seq).serialize())[0])
         await self._api.set_global_tc_link_key(network_info.tc_link_key.key, outgoing_frame_counter=t.uint32_t.deserialize(t.uint32_t(network_info.tc_link_key.tx_counter).serialize())[0])
-        # await self._api.set_unique_tc_link_key(node_info.ieee, network_info.tc_link_key.key)
         epid, _ = zigpy.types.uint64_t.deserialize(
             network_info.extended_pan_id.serialize()
         )
@@ -85,8 +88,8 @@ class ControllerApplication(zigpy.application.ControllerApplication):
             raise zigpy.exceptions.FormationFailure(
                 f"Unexpected error form network"
             )
-        await asyncio.sleep(3)
-        LOGGER.debug("wait for three seconds for new network has been ready")
+        await asyncio.sleep(1)
+        LOGGER.debug("wait for a second so the new network has been ready")
 
     async def load_network_info(self, *, load_devices=False):
         """Load network info from NCP"""
@@ -96,6 +99,8 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         ieee = await self._api.get_mac_address()
         node_info.ieee = t.EUI64(ieee)
         await self._api.network_init() #TODO：make sure the stack is on
+        await asyncio.sleep(1)
+        LOGGER.debug("wait for a second to make sure the stack is on")
         nwk_info = await self._api.get_network_info()
         if nwk_info["node_type"] == BLZDeviceRole.COORDINATOR:
             node_info.logical_type = zdo_t.LogicalType.Coordinator
