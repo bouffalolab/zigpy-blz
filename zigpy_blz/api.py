@@ -294,8 +294,17 @@ class Blz:
         """Add an endpoint to NCP."""
         LOGGER.debug("Adding endpoint %s, profile ID %s, device ID %s", endpoint, profile_id, device_id)
         input_cluster_count = t.uint8_t(len(input_clusters))
+        for i in range(input_cluster_count):
+           LOGGER.debug("Endpoint %s; Input cluster id %s", endpoint, input_clusters[i]) 
         output_cluster_count = t.uint8_t(len(output_clusters))
-        rsp = await self.send_frame(FrameId.ADD_ENDPOINT, endpoint=endpoint, profile_id=profile_id, device_id=device_id, app_flags=app_flags, input_cluster_count=input_cluster_count, output_cluster_count=output_cluster_count, input_cluster_list=input_clusters, output_cluster_list=output_clusters)
+        for i in range(output_cluster_count):
+           LOGGER.debug("Endpoint %s; Output cluster id %s", endpoint, output_clusters[i]) 
+        
+        # Wrap the Python lists with RawUint16List for proper serialization
+        icl = RawUint16List(input_clusters)
+        ocl = RawUint16List(output_clusters)
+        
+        rsp = await self.send_frame(FrameId.ADD_ENDPOINT, endpoint=endpoint, profile_id=profile_id, device_id=device_id, app_flags=app_flags, input_cluster_count=input_cluster_count, output_cluster_count=output_cluster_count, input_cluster_list=icl, output_cluster_list=ocl)
         LOGGER.debug("Add endpoint response: %s", rsp)
         return rsp.get("status", Status.FAILURE)
 
@@ -513,5 +522,3 @@ class Blz:
         else:
             LOGGER.error("Failed to get application version: %s", rsp["status"])
             raise Exception(f"Failed to get application version: {rsp['status']}")
-
-

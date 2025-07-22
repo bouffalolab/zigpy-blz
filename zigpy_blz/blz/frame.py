@@ -49,8 +49,8 @@ FRAME_SCHEMAS = {
             "app_flags": t.uint8_t,
             "input_cluster_count": t.uint8_t,
             "output_cluster_count": t.uint8_t,
-            "input_cluster_list": t.List[t.uint16_t],
-            "output_cluster_list": t.List[t.uint16_t],
+            "input_cluster_list": RawUint16List,
+            "output_cluster_list": RawUint16List,
         },  # Request schema
         {"status": Status},  # Response schema
     ),
@@ -158,7 +158,7 @@ FRAME_SCHEMAS = {
             "status": Status,
             "network_address": t.uint16_t,
             "relay_count": t.uint8_t,
-            "relay_list": t.List[t.uint16_t],
+            "relay_list": RawUint16List,
         },  # Response schema
     ),
     FrameId.GET_ROUTE_TABLE_COUNT: (
