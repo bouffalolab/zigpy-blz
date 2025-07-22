@@ -1,4 +1,10 @@
+import struct
+import typing as typ
 import zigpy.types as t
+
+# ---------------------------------------------------------------------------
+# Helper types
+# ---------------------------------------------------------------------------
 
 class Bytes(bytes):
     def serialize(self):
@@ -8,8 +14,40 @@ class Bytes(bytes):
     def deserialize(cls, data):
         return cls(data), b""
 
+
+class RawUint16List(t.List[t.uint16_t]):
+    """A list of ``uint16_t`` values written *without* a length prefix.
+
+    The BLZ NCP expects the cluster list to be transmitted exactly
+    ``count × 16‑bit LE`` bytes – the length (*inputClusterCount* or
+    *outputClusterCount*) is sent separately.  The standard ``zigpy.types
+    List`` prepends its own 16‑bit length; using that would shift the data by
+    two bytes.  This helper omits the prefix and serialises every element
+    little‑endian, matching what *blz_handle_add_endpoint()* reads with
+    ``blz_utils_fetch_bytes()``.
+    """
+
+    def serialize(self):
+        # Join each uint16 in little‑endian order ("<H")
+        return b"".join(struct.pack("<H", int(v) & 0xFFFF) for v in self)
+    
+    @classmethod
+    def deserialize(cls, data: bytes, count: int):
+        byte_len = count * 2
+        if len(data) < byte_len:
+            raise ValueError("Not enough data to deserialize RawUint16List")
+        values = [t.uint16_t(struct.unpack("<H", data[i:i + 2])[0])
+                  for i in range(0, byte_len, 2)]
+        return cls(values), data[byte_len:]
+
+
+# ---------------------------------------------------------------------------
+# Frame‑level types
+# ---------------------------------------------------------------------------
+
 class FrameId(t.uint16_t):
     """Frame IDs based on BLZ documentation."""
+
     # Control Frames
     ACK = 0x0001
     ERROR = 0x0002
@@ -86,15 +124,18 @@ class Frame(t.Struct):
     frame_id: FrameId
     payload: Bytes
 
+
 class BlzTransmitOptions(t.bitmap8):
     NONE = 0x00
     SECURITY_ENABLED = 0x01
     ACK_ENABLED = 0x04
 
+
 class BlzMsgType(t.uint8_t):
     BLZ_MSG_TYPE_UNICAST = t.uint8_t(0x01)
     BLZ_MSG_TYPE_MULTICAST = t.uint8_t(0x02)
     BLZ_MSG_TYPE_BROADCAST = t.uint8_t(0x03)
+
 
 class BLZDeviceRole(t.uint8_t):
     COORDINATOR = 0x00
@@ -104,10 +145,12 @@ class BLZDeviceRole(t.uint8_t):
     SLEEPY_ENDDEVICE = 0x82
     INVALID = 0xff
 
+
 class Status(t.enum8):
     SUCCESS = 0
     FAILURE = 1
     TIMEOUT = 2
+
 
 class FirmwareVersion(t.IntStruct, t.uint32_t):
     reserved: t.uint8_t
@@ -115,9 +158,11 @@ class FirmwareVersion(t.IntStruct, t.uint32_t):
     minor: t.uint8_t
     major: t.uint8_t
 
+
 class NetworkState(t.enum8):
     OFFLINE = 0
     CONNECTED = 1
+
 
 class BlzValueId(t.uint8_t):
     """
@@ -157,8 +202,18 @@ class BlzValueId(t.uint8_t):
     # MAC address of NCP
     BLZ_VALUE_ID_MAC_ADDRESS = t.uint8_t(0x20)
     BLZ_VALUE_ID_APP_VERSION = t.uint8_t(0x21)
-    
-def deserialize_dict(data, schema):
+
+
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+def deserialize_dict(data: bytes, schema):
+    """Deserialize *data* according to *schema* into a dict.
+
+    Each entry in *schema* is ``name -> type``; the function returns
+    ``(result_dict, remaining_bytes)``.
+    """
     result = {}
     for name, type_ in schema.items():
         try:
@@ -166,12 +221,5 @@ def deserialize_dict(data, schema):
         except ValueError:
             if data:
                 raise
-
             result[name] = None
     return result, data
-
-
-
-
-
-
