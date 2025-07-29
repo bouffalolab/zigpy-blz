@@ -16,7 +16,6 @@ import importlib.metadata
 from zigpy_blz.api import Blz
 from zigpy_blz.blz.types import BlzTransmitOptions, BlzMsgType, FrameId, Bytes, BLZDeviceRole, Status
 import zigpy_blz.exception
-import asyncio
 
 LOGGER = logging.getLogger(__name__)
 
@@ -88,8 +87,6 @@ class ControllerApplication(zigpy.application.ControllerApplication):
             raise zigpy.exceptions.FormationFailure(
                 f"Unexpected error form network"
             )
-        await asyncio.sleep(1)
-        LOGGER.debug("wait for a second so the new network has been ready")
 
     async def load_network_info(self, *, load_devices=False):
         """Load network info from NCP"""
