@@ -107,7 +107,7 @@ class ControllerApplication(zigpy.application.ControllerApplication):
 
         node_info.model = "BL706"
 
-        node_info.version = f"{int(self._api.firmware_version):#010x}"
+        node_info.version = f"{self._api.firmware_version.major}.{self._api.firmware_version.minor}.{self._api.firmware_version.patch}.{self._api.firmware_version.reserved}"
 
         network_info.source = f"zigpy_blz@{importlib.metadata.version('zigpy_blz')}"
         network_info.metadata = {

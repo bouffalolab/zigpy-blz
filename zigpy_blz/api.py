@@ -38,7 +38,7 @@ class Blz:
         self._app = app
         self._config = device_config
         self._device_state = NetworkState.OFFLINE
-        self._firmware_version = FirmwareVersion(0)
+        self._firmware_version = FirmwareVersion(major=1,minor=0,patch=0,reserved=0)
         self._uart: zigpy_blz.uart.BlzUartGateway | None = None
         self._tx_seq = 0  # Sequence number for outgoing frames
         self._rx_seq = 0  # Sequence number for incoming frames
