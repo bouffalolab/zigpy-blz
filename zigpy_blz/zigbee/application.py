@@ -11,8 +11,7 @@ import zigpy.exceptions
 import zigpy.types as t
 import zigpy.zdo.types as zdo_t
 import zigpy.util
-import importlib.metadata
-
+from zigpy_blz import __version__
 from zigpy_blz.api import Blz
 from zigpy_blz.blz.types import BlzTransmitOptions, BlzMsgType, FrameId, Bytes, BLZDeviceRole, Status
 import zigpy_blz.exception
@@ -109,7 +108,8 @@ class ControllerApplication(zigpy.application.ControllerApplication):
 
         node_info.version = await self._api.get_app_version()
 
-        network_info.source = f"zigpy_blz@{importlib.metadata.version('zigpy_blz')}"
+        network_info.source = f"zigpy_blz@{__version__}"
+        
         network_info.metadata = {
             "blz": {
                 "version": node_info.version,
