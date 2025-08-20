@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import sys
 import logging
 from typing import Any
 
@@ -17,6 +17,11 @@ from zigpy_blz.blz.types import BlzTransmitOptions, BlzMsgType, FrameId, Bytes, 
 import zigpy_blz.exception
 import asyncio
 
+if sys.version_info[:2] < (3, 11):
+    from async_timeout import timeout as asyncio_timeout  # pragma: no cover
+else:
+    from asyncio import timeout as asyncio_timeout  # pragma: no cover
+    
 LOGGER = logging.getLogger(__name__)
 
 
@@ -25,6 +30,8 @@ class ControllerApplication(zigpy.application.ControllerApplication):
     _probe_config_variants = [
         {zigpy.config.CONF_DEVICE_BAUDRATE: 2000000},
     ]
+    
+    _watchdog_period: int = 60
 
     def __init__(self, config: dict[str, Any]):
         """Initialize instance."""
@@ -37,6 +44,8 @@ class ControllerApplication(zigpy.application.ControllerApplication):
             await api.connect()
         except Exception:
             await api.reset()
+            await asyncio.sleep(3)
+            LOGGER.info("Coordinator hardware reset completed")
             api.close()
             raise
         self._api = api
@@ -46,6 +55,39 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         if self._api is not None:
             self._api.close()
             self._api = None
+
+    async def _watchdog_feed(self) -> None:
+        """Reset the firmware watchdog timer.
+        
+        This method is called by zigpy's watchdog framework to check if the device
+        is still responding. We use get_network_info() as a health check since it's
+        a lightweight operation that verifies communication with the device.
+        
+        When this fails, zigpy will trigger connection_lost, which will eventually
+        cause ZHA to call connect() again - and connect() already handles hardware
+        reset if needed.
+        """
+        if self._api is None:
+            raise RuntimeError("API not connected")
+            
+        LOGGER.debug("Feeding watchdog - checking device health")
+        
+        # Use get_network_info as health check indicator with configurable timeout
+        watchdog_timeout = self._config.get(zigpy.config.CONF_DEVICE, {}).get("watchdog_timeout", 10.0)
+        
+        try:
+            async with asyncio_timeout(watchdog_timeout):
+                await self._api.get_network_info()
+                
+            LOGGER.debug("Watchdog fed successfully - device is responding")
+            
+        except asyncio.TimeoutError:
+            LOGGER.warning("Watchdog health check timed out after %ss", watchdog_timeout)
+            raise
+            
+        except Exception as exc:
+            LOGGER.warning("Watchdog health check failed: %r", exc)
+            raise
 
     async def permit_with_link_key(self, node: t.EUI64, link_key: t.KeyData, time_s=60):
         await self._api.set_unique_tc_link_key(
