@@ -64,10 +64,10 @@ class Blz:
 
         if self._uart is None:
             self._uart = await zigpy_blz.uart.connect(self._config, self)
-        # await self.reset()
-        # LOGGER.debug("Reset the NCP")
-        # await asyncio.sleep(1)
-        # LOGGER.debug("After wait for one seconds")
+        await self.reset()
+        LOGGER.debug("Resetting the NCP")
+        await asyncio.sleep(1)
+        LOGGER.debug("After wait for one seconds")
         await self.network_init()
         LOGGER.info("Connected to NCP")
         self._device_state = NetworkState.CONNECTED

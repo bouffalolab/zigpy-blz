@@ -43,9 +43,6 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         try:
             await api.connect()
         except Exception:
-            await api.reset()
-            await asyncio.sleep(3)
-            LOGGER.info("Coordinator hardware reset completed")
             api.close()
             raise
         self._api = api
