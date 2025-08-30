@@ -41,6 +41,19 @@ Upgrade the package within your virtual environment (requires `git`):
      - git+https://github.com/bouffalolab/zigpy-blz/
    ```
 
+### Domoticz and Zigbee4 Domoticz plugin
+
+You can start from the [plugin installation wiki page ](https://zigbeefordomoticz.github.io/wiki/en-eng/Plugin_Installation.html)
+
+When the plugin is correctly installed with Domotic, simply go to the Domoticz Hardware page, 
+
+* select "zigpy for domoticz plugin (zigpy enabled)"
+* Coordinator Model: Bouffalo Lab Zigbee (via zigpy)
+* Coordinator connection type: USB (the plugin will set the correct baudrate for the BLZ702 dongle)
+* Serial Port: select the right serial path
+
+* and finally press Add
+
 ### Hardware Support
 
 zigpy-blz is compatible with Bouffalo Lab’s BLZ radios, which use the Bouffalo Lab Zigbee (BLZ) Serial Protocol. Ensure your firmware version matches the protocol version supported by this library.
