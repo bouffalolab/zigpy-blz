@@ -7,7 +7,7 @@ name = "zigpy-blz"
 dynamic = ["version"]
 description = "A Python library for integrating Bouffalo Lab Zigbee (BLZ) radios with zigpy"
 urls = { repository = "https://github.com/bouffalolab/zigpy-blz" }
-authors = [{ name = "Frank Li", email = "fangzhel@bouffalolab.com" }]
+authors = [{ name = "Frank Li", email = "fangzhel@umich.edu" }]
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.8"
