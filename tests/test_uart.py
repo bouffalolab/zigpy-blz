@@ -17,7 +17,7 @@ async def test_send():
     uart_gateway.send(test_data)
 
     expected_crc = uart_gateway._compute_crc(test_data)
-    expected_frame = uart_gateway.START_BYTE + uart_gateway._escape_frame(test_data) + expected_crc + uart_gateway.STOP_BYTE
+    expected_frame = uart_gateway.START_BYTE + uart_gateway._escape_frame(test_data + expected_crc) + uart_gateway.STOP_BYTE
 
     uart_gateway._transport.write.assert_called_once_with(expected_frame)
 
@@ -28,15 +28,14 @@ async def test_data_received_with_valid_crc(caplog):
 
     valid_data = b"\x00\x00\x05\x00"
     crc = uart_gateway._compute_crc(valid_data)
-    frame = uart_gateway.START_BYTE + uart_gateway._escape_frame(valid_data) + crc + uart_gateway.STOP_BYTE
+    frame = uart_gateway.START_BYTE + uart_gateway._escape_frame(valid_data + crc) + uart_gateway.STOP_BYTE
 
+    uart_gateway._transport = MagicMock()
     with caplog.at_level(logging.DEBUG):
-        try:
-            uart_gateway.data_received(frame)
-        except:
-            pass
+        uart_gateway.data_received(frame)
 
-    assert "Frame received:" in caplog.text
+    api.data_received.assert_called_once_with(valid_data)
+    uart_gateway._transport.write.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_data_received_with_invalid_crc(caplog):
