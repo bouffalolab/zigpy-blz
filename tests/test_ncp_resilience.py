@@ -257,3 +257,28 @@ async def test_load_network_info_does_not_restart_the_stack():
 
     api.network_init.assert_not_awaited()
     assert app.state.network_info.channel == 25
+
+
+@pytest.mark.asyncio
+async def test_timeout_while_connected_reports_connection_lost(monkeypatch):
+    # The protocol has no request/response correlation, so after a timeout a late
+    # response could be taken for the next request; reconnecting resynchronizes.
+    monkeypatch.setattr(blz_api, "ACK_TIMEOUT", 0.05)
+    app, api = make_connected_api()
+
+    with pytest.raises(CommandError):
+        await api.get_network_info()
+
+    app.connection_lost.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_timeout_while_connecting_only_raises(monkeypatch):
+    monkeypatch.setattr(blz_api, "ACK_TIMEOUT", 0.05)
+    app, api = make_connected_api()
+    api._device_state = NetworkState.OFFLINE
+
+    with pytest.raises(CommandError):
+        await api.network_init()
+
+    app.connection_lost.assert_not_called()

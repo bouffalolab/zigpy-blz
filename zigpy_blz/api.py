@@ -143,8 +143,12 @@ class Blz:
                     return result
             except asyncio.TimeoutError:
                 LOGGER.warning("Timeout waiting for frame_id=%#x, seq=%d, attempt=%d, future=%s", frame_id, self._tx_seq, attempt + 1, fut)
+                exc = CommandError(Status.TIMEOUT, f"Frame {frame_id:#06x} timed out")
                 # Not resent: the NCP executes a frame flagged RETX again instead of de-duplicating it.
-                raise CommandError(Status.TIMEOUT, f"Frame {frame_id} timed out")
+                # Responses carry no request id, so a late one could answer the next request;
+                # reconnecting starts a fresh session instead.
+                self._report_ncp_lost(exc)
+                raise exc
             finally:
                 if fut in self._awaiting[frame_id]:
                     self._awaiting[frame_id].remove(fut)
@@ -195,18 +199,24 @@ class Blz:
         else:
             LOGGER.warning("Future already completed or canceled for frame_id=%#x, seq=%d, future=%s", frame.frame_id, self._rx_seq, fut)
 
-    def _handle_reset_ack(self) -> None:
-        """Report an NCP reboot that we did not request, so zigpy reconnects."""
-        # The NCP sends RESET_ACK only from its boot path, and its Zigbee stack stays
-        # stopped until the next NETWORK_INIT, so the host has to reinitialize it.
-        if self._reset_requested or self._device_state != NetworkState.CONNECTED:
-            self._reset_requested = False
+    def _report_ncp_lost(self, exc: Exception) -> None:
+        """Report an NCP failure to zigpy once, so it reconnects and NETWORK_INIT restarts the stack."""
+        if self._device_state != NetworkState.CONNECTED:
             return
 
-        LOGGER.warning("NCP rebooted unexpectedly, reconnecting")
+        LOGGER.warning("%s, reconnecting", exc)
         self._device_state = NetworkState.OFFLINE
         if self._app is not None:
-            self._app.connection_lost(NcpResetError("NCP rebooted unexpectedly"))
+            self._app.connection_lost(exc)
+
+    def _handle_reset_ack(self) -> None:
+        """Report an NCP reboot that we did not request."""
+        # The NCP sends RESET_ACK only from its boot path, and its Zigbee stack stays
+        # stopped until the next NETWORK_INIT.
+        if self._reset_requested:
+            self._reset_requested = False
+            return
+        self._report_ncp_lost(NcpResetError("NCP rebooted unexpectedly"))
 
     def _check_stack_status(self, params) -> None:
         """Report the NCP leaving its network unless the host asked for it."""
@@ -218,13 +228,9 @@ class Blz:
             return
         # The NCP reports NETWORK_DOWN only when it leaves the network; outside a
         # leave/form we started, the stack is gone and has to be brought back up.
-        if self._network_change_requested or self._device_state != NetworkState.CONNECTED:
+        if self._network_change_requested:
             return
-
-        LOGGER.warning("NCP left the network unexpectedly, reconnecting")
-        self._device_state = NetworkState.OFFLINE
-        if self._app is not None:
-            self._app.connection_lost(NcpNetworkDownError("NCP left the network unexpectedly"))
+        self._report_ncp_lost(NcpNetworkDownError("NCP left the network unexpectedly"))
 
     async def network_init(self) -> Status:
         """Initialize the network."""
