@@ -59,14 +59,24 @@ class BlzUartGateway(asyncio.Protocol):
         self._buffer += data
         while self._buffer:
             start = self._buffer.find(self.START_BYTE)
-            stop = self._buffer.find(self.STOP_BYTE)
-            if start < 0 or stop < 0 or stop < start:
+            if start < 0:
+                # Every frame begins with START, so bytes before one are line noise
+                self._buffer = b""
+                return
+
+            stop = self._buffer.find(self.STOP_BYTE, start + 1)
+            if stop < 0:
+                self._buffer = self._buffer[start:]
                 return
 
             frame = self._buffer[start + 1:stop]
             self._buffer = self._buffer[stop + 1:]
 
-            frame = self._unescape_frame(frame)
+            try:
+                frame = self._unescape_frame(frame)
+            except StopIteration:
+                LOGGER.warning("Dropping frame that ends with an escape byte")
+                continue
             if len(frame) < 3:
                 continue
 

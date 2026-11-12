@@ -18,6 +18,14 @@ class CommandError(APIException):
         return self._status
 
 
+class NcpResetError(APIException):
+    """The NCP rebooted without being asked to."""
+
+
+class NcpNetworkDownError(APIException):
+    """The NCP left its network without being asked to."""
+
+
 class MismatchedResponseError(APIException):
     def __init__(
         self, frame_id: FrameId, params: dict[str, typing.Any], *args, **kwargs

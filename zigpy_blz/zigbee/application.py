@@ -24,6 +24,10 @@ else:
     
 LOGGER = logging.getLogger(__name__)
 
+GP_ENDPOINT = 242
+# TRUST_CENTER_JOIN_STATUS_LEAVE in the NCP's blz.h
+DEVICE_JOIN_STATUS_LEAVE = 0x03
+
 
 class ControllerApplication(zigpy.application.ControllerApplication):
     """ControllerApplication for BouffaloLab BLZ protocol based adapters."""
@@ -134,7 +138,6 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         node_info = self.state.node_info
         ieee = await self._api.get_mac_address()
         node_info.ieee = t.EUI64(ieee)
-        await self._api.network_init() #TODO：make sure the stack is on
         nwk_info = await self._api.get_network_info()
         if nwk_info["node_type"] == BLZDeviceRole.COORDINATOR:
             node_info.logical_type = zdo_t.LogicalType.Coordinator
@@ -218,6 +221,13 @@ class ControllerApplication(zigpy.application.ControllerApplication):
     async def send_packet(self, packet):
         LOGGER.debug("Sending packet: %r", packet)
 
+        if packet.dst_ep == GP_ENDPOINT:
+            # BLZ has no Green Power support, and the NCP resets after GP frames such as
+            # the proxy commissioning broadcast zigpy sends on every permit. Drop them,
+            # as the herdsman BLZ adapter does.
+            LOGGER.debug("Dropping Green Power packet")
+            return
+
         # Map packet.dst.addr_mode to msg_type and addresses
         if packet.dst.addr_mode == t.AddrMode.NWK:
             msg_type = BlzMsgType.BLZ_MSG_TYPE_UNICAST
@@ -231,7 +241,10 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         elif packet.dst.addr_mode == t.AddrMode.IEEE:
             # Resolve EUI64 to network address (node ID)
             eui64 = packet.dst.address  # Should be an instance of EUI64
-            dst_short_addr = await self._api.get_node_id_by_EUI64(eui64)
+            try:
+                dst_short_addr = await self._api.get_node_id_by_EUI64(eui64)
+            except zigpy_blz.exception.CommandError as exc:
+                raise zigpy.exceptions.DeliveryError(f"Cannot resolve EUI64 address {eui64}: {exc!r}") from exc
             if dst_short_addr is None:
                 raise ValueError(f"Cannot resolve EUI64 address: {eui64}")
             msg_type = BlzMsgType.BLZ_MSG_TYPE_UNICAST
@@ -252,18 +265,24 @@ class ControllerApplication(zigpy.application.ControllerApplication):
 
         # Call the send_aps_data API
         async with self._limit_concurrency():
-            await self._api.send_aps_data(
-                msg_type=msg_type,
-                dst_short_addr=dst_short_addr,
-                profile_id=t.uint16_t(packet.profile_id),
-                cluster_id=t.uint16_t(packet.cluster_id),
-                src_ep=t.uint8_t(packet.src_ep),
-                dst_ep=t.uint8_t(packet.dst_ep),
-                radius=t.uint8_t(packet.radius),
-                tx_options=tx_options,
-                asdu=Bytes(asdu)
-            )
+            try:
+                status = await self._api.send_aps_data(
+                    msg_type=msg_type,
+                    dst_short_addr=dst_short_addr,
+                    profile_id=t.uint16_t(packet.profile_id),
+                    cluster_id=t.uint16_t(packet.cluster_id),
+                    src_ep=t.uint8_t(packet.src_ep),
+                    dst_ep=t.uint8_t(packet.dst_ep),
+                    radius=t.uint8_t(packet.radius),
+                    tx_options=tx_options,
+                    asdu=Bytes(asdu)
+                )
+            except zigpy_blz.exception.CommandError as exc:
+                raise zigpy.exceptions.DeliveryError(f"Failed to send packet: {exc!r}") from exc
             LOGGER.debug(f"Sending APS data: msg_type={msg_type}, dst={dst_short_addr}")
+
+        if status != Status.SUCCESS:
+            raise zigpy.exceptions.DeliveryError(f"Failed to send packet: {status!r}", status=status)
 
     async def permit_ncp(self, time_s=60):
         assert 0 <= time_s <= 254
@@ -281,6 +300,8 @@ class ControllerApplication(zigpy.application.ControllerApplication):
             elif frame_id == FrameId.STACK_STATUS_CALLBACK:
                 # Handle stack status event
                 self._handle_stack_status(response)
+            elif frame_id == FrameId.NWK_STATUS_CALLBACK:
+                LOGGER.debug("NWK status: %s", response)
             else:
                 LOGGER.warning("Other frame is in callback:, frame_id: %#x, response: %s", frame_id, response)
 
@@ -325,14 +346,16 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         LOGGER.debug("Device join handler invoked: %s", response)
         nwk = response["node_id"]
         ieee = t.EUI64(response["eui64"])
+        if response["status"] == DEVICE_JOIN_STATUS_LEAVE:
+            LOGGER.info(f"Device left: IEEE={ieee}, NWK={nwk}")
+            self.handle_leave(nwk, ieee)
+            return
         LOGGER.info(f"Device joined: IEEE={ieee}, NWK={nwk}")
         self.handle_join(nwk, ieee, 0)
     
     def _handle_stack_status(self, response):
-        if response['status'] != Status.SUCCESS:
-            LOGGER.error("Stack status is incorrect: %s", response)
-            # await self._api.reset()
-            # LOGGER.info("NCP is reset due to stack error")
+        # An unexpected NETWORK_DOWN is reported to zigpy by the API layer.
+        LOGGER.debug("Stack status: %s", response)
 
 
 class BlzDevice(zigpy.device.Device):

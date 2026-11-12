@@ -9,7 +9,7 @@ from typing import Any, Callable
 from zigpy.config import CONF_DEVICE_PATH
 import zigpy.types as t
 
-from zigpy_blz.exception import APIException, CommandError, MismatchedResponseError
+from zigpy_blz.exception import APIException, CommandError, MismatchedResponseError, NcpNetworkDownError, NcpResetError
 from zigpy_blz.blz.types import *
 import zigpy_blz.uart
 from zigpy_blz.blz.frame import *
@@ -20,6 +20,9 @@ LOGGER = logging.getLogger(__name__)
 
 RETRANSMISSION_LIMIT = 3
 ACK_TIMEOUT = 3.0
+# NCP_NETWORK_UP / NCP_NETWORK_DOWN in the NCP's blz.h
+STACK_STATUS_NETWORK_UP = 0x00
+STACK_STATUS_NETWORK_DOWN = 0xFF
 
 
 class Blz:
@@ -44,6 +47,9 @@ class Blz:
         self._rx_seq = 0  # Sequence number for incoming frames
         self._awaiting = collections.defaultdict(list)
         self._command_lock = asyncio.Lock()
+        self._reset_requested = False
+        self._network_change_requested = False
+        self._closing = False
 
     @property
     def firmware_version(self) -> FirmwareVersion:
@@ -74,6 +80,10 @@ class Blz:
 
     def connection_lost(self, exc: Exception) -> None:
         """Lost serial connection."""
+        if self._closing:
+            LOGGER.debug("Serial %r closed", self._config[CONF_DEVICE_PATH])
+            return
+
         LOGGER.debug(
             "Serial %r connection lost unexpectedly: %r",
             self._config[CONF_DEVICE_PATH],
@@ -133,9 +143,12 @@ class Blz:
                     return result
             except asyncio.TimeoutError:
                 LOGGER.warning("Timeout waiting for frame_id=%#x, seq=%d, attempt=%d, future=%s", frame_id, self._tx_seq, attempt + 1, fut)
-                if attempt == RETRANSMISSION_LIMIT - 1:
-                    # sending timeout error
-                    raise CommandError(Status.TIMEOUT, f"Frame {frame_id} timed out")
+                exc = CommandError(Status.TIMEOUT, f"Frame {frame_id:#06x} timed out")
+                # Not resent: the NCP executes a frame flagged RETX again instead of de-duplicating it.
+                # Responses carry no request id, so a late one could answer the next request;
+                # reconnecting starts a fresh session instead.
+                self._report_ncp_lost(exc)
+                raise exc
             finally:
                 if fut in self._awaiting[frame_id]:
                     self._awaiting[frame_id].remove(fut)
@@ -161,9 +174,14 @@ class Blz:
             LOGGER.warning("Failed to parse frame %s: %s", frame, exc)
             return
         
-        if frame.frame_id in [FrameId.APS_DATA_CONFIRM, FrameId.RESET_ACK]:
+        if frame.frame_id == FrameId.RESET_ACK:
+            self._handle_reset_ack()
             return
-        if frame.frame_id in [FrameId.APS_DATA_INDICATION, FrameId.DEVICE_JOIN_CALLBACK, FrameId.STACK_STATUS_CALLBACK]:
+        if frame.frame_id == FrameId.APS_DATA_CONFIRM:
+            return
+        if frame.frame_id == FrameId.STACK_STATUS_CALLBACK:
+            self._check_stack_status(params)
+        if frame.frame_id in [FrameId.APS_DATA_INDICATION, FrameId.DEVICE_JOIN_CALLBACK, FrameId.STACK_STATUS_CALLBACK, FrameId.NWK_STATUS_CALLBACK]:
             self._app.blz_callback_handler(frame.frame_id, params)
             return
 
@@ -181,6 +199,39 @@ class Blz:
         else:
             LOGGER.warning("Future already completed or canceled for frame_id=%#x, seq=%d, future=%s", frame.frame_id, self._rx_seq, fut)
 
+    def _report_ncp_lost(self, exc: Exception) -> None:
+        """Report an NCP failure to zigpy once, so it reconnects and NETWORK_INIT restarts the stack."""
+        if self._device_state != NetworkState.CONNECTED:
+            return
+
+        LOGGER.warning("%s, reconnecting", exc)
+        self._device_state = NetworkState.OFFLINE
+        if self._app is not None:
+            self._app.connection_lost(exc)
+
+    def _handle_reset_ack(self) -> None:
+        """Report an NCP reboot that we did not request."""
+        # The NCP sends RESET_ACK only from its boot path, and its Zigbee stack stays
+        # stopped until the next NETWORK_INIT.
+        if self._reset_requested:
+            self._reset_requested = False
+            return
+        self._report_ncp_lost(NcpResetError("NCP rebooted unexpectedly"))
+
+    def _check_stack_status(self, params) -> None:
+        """Report the NCP leaving its network unless the host asked for it."""
+        status = params.get("status")
+        if status == STACK_STATUS_NETWORK_UP:
+            self._network_change_requested = False
+            return
+        if status != STACK_STATUS_NETWORK_DOWN:
+            return
+        # The NCP reports NETWORK_DOWN only when it leaves the network; outside a
+        # leave/form we started, the stack is gone and has to be brought back up.
+        if self._network_change_requested:
+            return
+        self._report_ncp_lost(NcpNetworkDownError("NCP left the network unexpectedly"))
+
     async def network_init(self) -> Status:
         """Initialize the network."""
         LOGGER.debug("Attempting to initialize the network.")
@@ -191,6 +242,7 @@ class Blz:
     async def form_network(self, ext_pan_id: t.uint64_t = t.uint64_t(0), pan_id: t.uint16_t = t.uint16_t(0), channel: t.uint8_t = t.uint8_t(11)) -> Status:
         """Form a Zigbee network."""
         LOGGER.debug("Forming network with ext_pan_id=%s, pan_id=%s, channel=%s", ext_pan_id, pan_id, channel)
+        self._network_change_requested = True
         rsp = await self.send_frame(FrameId.FORM_NETWORK, ext_pan_id=ext_pan_id, pan_id=pan_id, channel=channel)
         LOGGER.debug("Form network response: %s", rsp)
         return rsp.get("status", Status.FAILURE)
@@ -198,6 +250,7 @@ class Blz:
     async def leave_network(self) -> Status:
         """Leave a Zigbee network."""
         LOGGER.debug("Requesting to leave the network.")
+        self._network_change_requested = True
         rsp = await self.send_frame(FrameId.LEAVE_NETWORK)
         LOGGER.debug("Leave network response: %s", rsp)
         return rsp.get("status", Status.FAILURE)
@@ -211,12 +264,14 @@ class Blz:
 
     async def reset(self) -> Status:
         LOGGER.debug("Resetting the NCP device.")
+        self._reset_requested = True
         await self.send_frame(FrameId.RESET)
         LOGGER.debug("Reset command sent.")
 
     def close(self):
         """Close the connection to the NCP."""
         LOGGER.debug("Closing UART connection.")
+        self._closing = True
         if self._uart:
             self._uart.close()
             self._uart = None
