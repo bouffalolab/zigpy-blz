@@ -262,6 +262,13 @@ class Blz:
         LOGGER.debug("Permit joining response: %s", rsp)
         return rsp.get("status", Status.FAILURE)
 
+    async def change_channel(self, channel: t.uint8_t, nwk_update_id: t.uint8_t) -> Status:
+        """Move the coordinator to another channel and set its nwkUpdateId."""
+        LOGGER.debug("Changing channel to %s, nwk_update_id=%s", channel, nwk_update_id)
+        rsp = await self.send_frame(FrameId.CHANGE_CHANNEL, channel=channel, nwk_update_id=nwk_update_id)
+        LOGGER.debug("Change channel response: %s", rsp)
+        return rsp["status"]
+
     async def reset(self) -> Status:
         LOGGER.debug("Resetting the NCP device.")
         self._reset_requested = True

@@ -88,6 +88,7 @@ class FrameId(t.uint16_t):
     DEVICE_JOIN_CALLBACK = 0x0036
     GET_NWK_PAYLOAD_LIMIT = 0x0037
     NWK_STATUS_CALLBACK = 0x0038
+    CHANGE_CHANNEL = 0x0039
 
     # Security Frames
     GET_NWK_SECURITY_INFOS = 0x0050
@@ -150,6 +151,10 @@ class Status(t.enum8):
     SUCCESS = 0
     FAILURE = 1
     TIMEOUT = 2
+    # BLZ_ERROR_* in the NCP's blz.h
+    ERROR_FAIL = 0x30
+    UNSUPPORTED_FRAME = 0x31
+    INVALID_VALUE = 0x33
 
 
 class FirmwareVersion(t.IntStruct, t.uint32_t):

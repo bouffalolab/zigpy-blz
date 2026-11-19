@@ -27,6 +27,11 @@ LOGGER = logging.getLogger(__name__)
 GP_ENDPOINT = 242
 # TRUST_CENTER_JOIN_STATUS_LEAVE in the NCP's blz.h
 DEVICE_JOIN_STATUS_LEAVE = 0x03
+# Never a valid channel: the NCP leaves its channel alone, and firmware without
+# CHANGE_CHANNEL answers UNSUPPORTED_FRAME.
+CHANNEL_CHANGE_PROBE = 0
+CHANNEL_CHANGE_TIMEOUT_S = 15
+CHANNEL_CHANGE_POLL_INTERVAL_S = 1
 
 
 class ControllerApplication(zigpy.application.ControllerApplication):
@@ -283,6 +288,34 @@ class ControllerApplication(zigpy.application.ControllerApplication):
 
         if status != Status.SUCCESS:
             raise zigpy.exceptions.DeliveryError(f"Failed to send packet: {status!r}", status=status)
+
+    async def move_network_to_channel(self, new_channel: int, *args, **kwargs) -> None:
+        # Devices follow zigpy's Mgmt_NWK_Update_req broadcast but the NCP moves only with
+        # CHANGE_CHANNEL, so refuse before broadcasting rather than strand the devices.
+        if new_channel != self.state.network_info.channel:
+            status = await self._api.change_channel(
+                t.uint8_t(CHANNEL_CHANGE_PROBE), t.uint8_t(self.state.network_info.nwk_update_id)
+            )
+            if status == Status.UNSUPPORTED_FRAME:
+                raise zigpy.exceptions.ControllerException(
+                    f"NCP firmware {self.state.node_info.version} cannot change channel, update the dongle firmware"
+                )
+        await super().move_network_to_channel(new_channel, *args, **kwargs)
+
+    async def _move_network_to_channel(self, new_channel: int, new_nwk_update_id: int) -> None:
+        status = await self._api.change_channel(t.uint8_t(new_channel), t.uint8_t(new_nwk_update_id))
+        if status != Status.SUCCESS:
+            raise zigpy.exceptions.ControllerException(f"NCP did not change channel: {status!r}")
+
+        # zigpy then waits for the new channel without a timeout, so confirm it here
+        try:
+            async with asyncio_timeout(CHANNEL_CHANGE_TIMEOUT_S):
+                while (await self._api.get_network_info())["channel"] != new_channel:
+                    await asyncio.sleep(CHANNEL_CHANGE_POLL_INTERVAL_S)
+        except asyncio.TimeoutError as exc:
+            raise zigpy.exceptions.ControllerException(
+                f"NCP is not on channel {new_channel} after {CHANNEL_CHANGE_TIMEOUT_S} s"
+            ) from exc
 
     async def permit_ncp(self, time_s=60):
         assert 0 <= time_s <= 254

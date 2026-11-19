@@ -203,6 +203,10 @@ FRAME_SCHEMAS = {
         {"dst_addr": t.uint16_t},  # Request schema
         {"status": Status, "payload_limit": t.uint8_t},  # Response schema
     ),
+    FrameId.CHANGE_CHANNEL: (
+        {"channel": t.uint8_t, "nwk_update_id": t.uint8_t},  # Request schema
+        {"status": Status},  # Response schema
+    ),
     FrameId.NWK_STATUS_CALLBACK: (
         {},  # No request data
         {
