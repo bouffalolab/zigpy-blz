@@ -33,6 +33,20 @@ CHANNEL_CHANGE_PROBE = 0
 CHANNEL_CHANGE_TIMEOUT_S = 15
 CHANNEL_CHANGE_POLL_INTERVAL_S = 1
 
+# A unicast is done when the NCP reports its APS_DATA_CONFIRM. Route discovery alone can take 10 s, so wait longer.
+# Right after the NCP starts, the first unicast to a router fails with ROUTE_ERROR after route discovery times out
+# (the neighbour table is empty until the router's next link status); the same frame sent again then gets through.
+APS_CONFIRM_TIMEOUT_S = 15
+APS_RETRIES = 2
+APS_RETRY_DELAY_S = 0.5
+APS_RETRYABLE_STATUSES = {
+    0xA7,  # APS_NO_ACK
+    0xD0,  # NWK_ROUTE_DISCOVERY_FAILED
+    0xD1,  # NWK_ROUTE_ERROR
+    0xE1,  # MAC_CHANNEL_ACCESS_FAILURE
+    0xE9,  # MAC_NO_ACK
+}
+
 
 class ControllerApplication(zigpy.application.ControllerApplication):
     """ControllerApplication for BouffaloLab BLZ protocol based adapters."""
@@ -47,6 +61,7 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         """Initialize instance."""
         super().__init__(config)
         self._api = None
+        self._aps_confirms_supported: bool | None = None  # None until the NCP confirms (or fails to confirm) a unicast
 
     async def connect(self):
         api = Blz(self, self._config[zigpy.config.CONF_DEVICE])
@@ -268,26 +283,55 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         # Extract the payload (ASDU)
         asdu = packet.data.serialize()
 
-        # Call the send_aps_data API
-        async with self._limit_concurrency():
-            try:
-                status = await self._api.send_aps_data(
-                    msg_type=msg_type,
-                    dst_short_addr=dst_short_addr,
-                    profile_id=t.uint16_t(packet.profile_id),
-                    cluster_id=t.uint16_t(packet.cluster_id),
-                    src_ep=t.uint8_t(packet.src_ep),
-                    dst_ep=t.uint8_t(packet.dst_ep),
-                    radius=t.uint8_t(packet.radius),
-                    tx_options=tx_options,
-                    asdu=Bytes(asdu)
-                )
-            except zigpy_blz.exception.CommandError as exc:
-                raise zigpy.exceptions.DeliveryError(f"Failed to send packet: {exc!r}") from exc
-            LOGGER.debug(f"Sending APS data: msg_type={msg_type}, dst={dst_short_addr}")
+        send = dict(
+            msg_type=msg_type,
+            dst_short_addr=dst_short_addr,
+            profile_id=t.uint16_t(packet.profile_id),
+            cluster_id=t.uint16_t(packet.cluster_id),
+            src_ep=t.uint8_t(packet.src_ep),
+            dst_ep=t.uint8_t(packet.dst_ep),
+            radius=t.uint8_t(packet.radius),
+            tx_options=tx_options,
+            asdu=Bytes(asdu),
+        )
+        # Broadcasts and multicasts, and firmware that never confirms, keep the old fire-and-forget behaviour.
+        wait_confirm = msg_type == BlzMsgType.BLZ_MSG_TYPE_UNICAST and self._aps_confirms_supported is not False
 
-        if status != Status.SUCCESS:
-            raise zigpy.exceptions.DeliveryError(f"Failed to send packet: {status!r}", status=status)
+        async with self._limit_concurrency():
+            for attempt in range(APS_RETRIES + 1):
+                tag, confirm = 0, None
+                if wait_confirm:
+                    tag, confirm = self._api.expect_aps_confirm(dst_short_addr, packet.cluster_id, packet.src_ep, packet.dst_ep)
+                try:
+                    try:
+                        status = await self._api.send_aps_data(**send, message_tag=tag)
+                    except zigpy_blz.exception.CommandError as exc:
+                        raise zigpy.exceptions.DeliveryError(f"Failed to send packet: {exc!r}") from exc
+                    LOGGER.debug(f"Sending APS data: msg_type={msg_type}, dst={dst_short_addr}")
+                    if status != Status.SUCCESS:
+                        raise zigpy.exceptions.DeliveryError(f"Failed to send packet: {status!r}", status=status)
+                    if confirm is None:
+                        return
+                    try:
+                        delivery = await asyncio.wait_for(confirm, APS_CONFIRM_TIMEOUT_S)
+                    except asyncio.TimeoutError:
+                        if not self._aps_confirms_supported:
+                            LOGGER.warning("NCP sent no APS_DATA_CONFIRM in %s s; not waiting for confirms", APS_CONFIRM_TIMEOUT_S)
+                            self._aps_confirms_supported = False
+                        return
+                finally:
+                    if tag:
+                        self._api.forget_aps_confirm(tag)
+                self._aps_confirms_supported = True
+                if delivery == 0:
+                    return
+                if delivery in APS_RETRYABLE_STATUSES and attempt < APS_RETRIES:
+                    LOGGER.debug("Delivery to 0x%04x failed with status 0x%02x, retrying", dst_short_addr, delivery)
+                    await asyncio.sleep(APS_RETRY_DELAY_S)
+                    continue
+                raise zigpy.exceptions.DeliveryError(
+                    f"Delivery to 0x{dst_short_addr:04x} failed: status 0x{delivery:02x}", status=delivery
+                )
 
     async def move_network_to_channel(self, new_channel: int, *args, **kwargs) -> None:
         # Devices follow zigpy's Mgmt_NWK_Update_req broadcast but the NCP moves only with

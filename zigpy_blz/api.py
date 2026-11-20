@@ -50,6 +50,9 @@ class Blz:
         self._reset_requested = False
         self._network_change_requested = False
         self._closing = False
+        # APS_DATA_CONFIRM tracking: message_tag -> ((dst, cluster, src_ep, dst_ep), future)
+        self._aps_tag = 0
+        self._aps_confirms: dict[int, tuple[tuple[int, int, int, int], asyncio.Future]] = {}
 
     @property
     def firmware_version(self) -> FirmwareVersion:
@@ -178,6 +181,7 @@ class Blz:
             self._handle_reset_ack()
             return
         if frame.frame_id == FrameId.APS_DATA_CONFIRM:
+            self._handle_aps_confirm(params)
             return
         if frame.frame_id == FrameId.STACK_STATUS_CALLBACK:
             self._check_stack_status(params)
@@ -389,10 +393,32 @@ class Blz:
         LOGGER.debug("Get IEEE by node ID response: %s", rsp)
         return rsp["eui64"]
 
-    async def send_aps_data(self, msg_type: t.uint8_t, dst_short_addr: t.uint16_t, profile_id: t.uint16_t, cluster_id: t.uint16_t, src_ep: t.uint8_t, dst_ep: t.uint8_t, tx_options: t.uint8_t, radius: t.uint8_t, asdu: bytes) -> Status:
+    def expect_aps_confirm(self, dst_short_addr: int, cluster_id: int, src_ep: int, dst_ep: int) -> tuple[int, asyncio.Future]:
+        """Reserve a message tag for an APS request and return it with a future for its APS_DATA_CONFIRM status."""
+        self._aps_tag = self._aps_tag % 0xFFFFFFFF + 1
+        fut = asyncio.get_running_loop().create_future()
+        self._aps_confirms[self._aps_tag] = ((int(dst_short_addr), int(cluster_id), int(src_ep), int(dst_ep)), fut)
+        return self._aps_tag, fut
+
+    def forget_aps_confirm(self, tag: int) -> None:
+        self._aps_confirms.pop(tag, None)
+
+    def _handle_aps_confirm(self, params: dict[str, Any]) -> None:
+        """Resolve the request an APS_DATA_CONFIRM belongs to: by message tag, else the oldest one to the same target."""
+        tag = int(params["message_tag"])
+        entry = self._aps_confirms.pop(tag, None) if tag else None
+        if entry is None:
+            key = (int(params["dst_short_addr"]), int(params["cluster_id"]), int(params["src_ep"]), int(params["dst_ep"]))
+            tag = next((k for k, (want, _) in self._aps_confirms.items() if want == key), None)
+            entry = self._aps_confirms.pop(tag, None) if tag is not None else None
+        LOGGER.debug("APS confirm: status=0x%02x tag=%s matched=%s", int(params["status"]), params["message_tag"], entry is not None)
+        if entry is not None and not entry[1].done():
+            entry[1].set_result(int(params["status"]))
+
+    async def send_aps_data(self, msg_type: t.uint8_t, dst_short_addr: t.uint16_t, profile_id: t.uint16_t, cluster_id: t.uint16_t, src_ep: t.uint8_t, dst_ep: t.uint8_t, tx_options: t.uint8_t, radius: t.uint8_t, asdu: bytes, message_tag: int = 0) -> Status:
         """Send an APS data request."""
-        LOGGER.debug("Sending APS data: msg_type %s, dst_short_addr %s, profile_id %s, cluster_id %s, src_ep %s, dst_ep %s, tx_options %s, radius %s", msg_type, dst_short_addr, profile_id, cluster_id, src_ep, dst_ep, tx_options, radius)
-        rsp = await self.send_frame(FrameId.SEND_APS_DATA, msg_type=msg_type, dst_short_addr=dst_short_addr, profile_id=profile_id, cluster_id=cluster_id, src_ep=src_ep, dst_ep=dst_ep, tx_options=tx_options, radius=radius, message_tag=t.uint32_t(0), payload_len=t.uint8_t(len(asdu)), payload=asdu)
+        LOGGER.debug("Sending APS data: msg_type %s, dst_short_addr %s, profile_id %s, cluster_id %s, src_ep %s, dst_ep %s, tx_options %s, radius %s, tag %s", msg_type, dst_short_addr, profile_id, cluster_id, src_ep, dst_ep, tx_options, radius, message_tag)
+        rsp = await self.send_frame(FrameId.SEND_APS_DATA, msg_type=msg_type, dst_short_addr=dst_short_addr, profile_id=profile_id, cluster_id=cluster_id, src_ep=src_ep, dst_ep=dst_ep, tx_options=tx_options, radius=radius, message_tag=t.uint32_t(message_tag), payload_len=t.uint8_t(len(asdu)), payload=asdu)
         LOGGER.debug("Send APS data response: %s", rsp)
         return rsp.get("status", Status.FAILURE)
 
